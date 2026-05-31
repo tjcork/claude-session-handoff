@@ -179,6 +179,15 @@ def assistant_text(entry: dict) -> str:
     return parse_message_text(entry.get("message"))
 
 
+def is_terminal_limit_notice(text: str) -> bool:
+    lowered = text.lower()
+    if "session limit" in lowered and ("you've hit" in lowered or "you have hit" in lowered):
+        return True
+    if "rate limit" in lowered and ("resets" in lowered or "try again" in lowered):
+        return True
+    return False
+
+
 def detect_path_style(path_text: str) -> str:
     if re.match(r"^[A-Za-z]:[\\/]", path_text):
         return "windows"
@@ -376,17 +385,27 @@ def main() -> int:
     latest_assistant_text = ""
     latest_assistant_tools: list[str] = []
     latest_assistant_stop_reason = ""
+    terminal_notice = ""
     open_thread = ""
-    saw_latest_assistant = False
+    latest_assistant_activity_index = None
 
-    for entry in reversed(tail_entries):
-        if entry.get("type") == "assistant" and not saw_latest_assistant:
+    for index in range(len(tail_entries) - 1, -1, -1):
+        entry = tail_entries[index]
+        if entry.get("type") == "assistant":
             message = entry.get("message")
-            if isinstance(message, dict):
-                latest_assistant_stop_reason = str(message.get("stop_reason") or "")
-                latest_assistant_tools = extract_tool_names(message)
-            latest_assistant_text = truncate(assistant_text(entry), 500) if assistant_text(entry) else ""
-            saw_latest_assistant = True
+            entry_text = assistant_text(entry)
+            if entry_text and is_terminal_limit_notice(entry_text):
+                if not terminal_notice:
+                    terminal_notice = truncate(entry_text, 300)
+                continue
+            if latest_assistant_activity_index is None:
+                latest_assistant_activity_index = index
+                if isinstance(message, dict):
+                    latest_assistant_stop_reason = str(message.get("stop_reason") or "")
+                    latest_assistant_tools = extract_tool_names(message)
+                latest_assistant_text = truncate(entry_text, 500) if entry_text else ""
+            elif terminal_notice and not latest_assistant_text and entry_text:
+                latest_assistant_text = truncate(entry_text, 500)
         if not recent_user:
             text = substantive_user_text(entry)
             if text:
@@ -413,6 +432,8 @@ def main() -> int:
         recent_context_parts.append(
             f"Latest assistant activity: prepared tool calls to {', '.join(latest_assistant_tools)}."
         )
+    if terminal_notice:
+        recent_context_parts.append(f"Session ended with notice: {terminal_notice}")
     recent_context = "\n".join(recent_context_parts) if recent_context_parts else "No recent conversational context could be extracted."
 
     if parse_errors:

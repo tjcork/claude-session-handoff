@@ -125,6 +125,118 @@ class SummarizeHandoffTests(unittest.TestCase):
         self.assertNotIn("Read", payload["recent_context"])
         self.assertEqual(payload["open_thread"], "Most recent user ask: Continue the task")
 
+    def test_rate_limit_tail_does_not_hide_latest_work_context(self) -> None:
+        session_path = self.temp_dir / "session-rate-limit-after-tool-use.jsonl"
+        entries = [
+            {
+                "sessionId": "session-rate-limit-after-tool-use",
+                "cwd": "/repo/project",
+                "timestamp": "2026-05-31T08:00:00Z",
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "resume the implementation plan from the third task",
+                        }
+                    ]
+                },
+            },
+            {
+                "sessionId": "session-rate-limit-after-tool-use",
+                "cwd": "/repo/project",
+                "timestamp": "2026-05-31T08:57:03Z",
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "A later implementation milestone finished with typecheck and build passing. Running focused reviews before the final fix.",
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+            },
+            {
+                "sessionId": "session-rate-limit-after-tool-use",
+                "cwd": "/repo/project",
+                "timestamp": "2026-05-31T09:00:59Z",
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Reviews are complete; both reviewers found one remaining cleanup race in the latest implementation. Dispatching a focused fix.",
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+            },
+            {
+                "sessionId": "session-rate-limit-after-tool-use",
+                "cwd": "/repo/project",
+                "timestamp": "2026-05-31T09:01:11Z",
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Agent",
+                            "input": {"description": "Fix final cleanup race"},
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+            },
+            {
+                "sessionId": "session-rate-limit-after-tool-use",
+                "cwd": "/repo/project",
+                "timestamp": "2026-05-31T09:01:11Z",
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "content": "You've hit your session limit · resets 2:10pm (Europe/London)",
+                        }
+                    ]
+                },
+            },
+            {
+                "sessionId": "session-rate-limit-after-tool-use",
+                "cwd": "/repo/project",
+                "timestamp": "2026-05-31T09:01:12Z",
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You've hit your session limit · resets 2:10pm (Europe/London)",
+                        }
+                    ],
+                    "stop_reason": "stop_sequence",
+                },
+            },
+        ]
+        session_path.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8")
+
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--session", str(session_path), "--json"],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertIn("Reviews are complete", payload["recent_context"])
+        self.assertIn("cleanup race", payload["recent_context"])
+        self.assertIn("session limit", payload["recent_context"])
+        self.assertNotIn("Latest assistant output: You've hit your session limit", payload["recent_context"])
+        self.assertEqual(payload["open_thread"], "Claude ended while preparing or awaiting a tool-driven step.")
+
     def test_likely_files_includes_filenames_lists(self) -> None:
         session_path = self.temp_dir / "session-filenames.jsonl"
         shutil.copy(FIXTURES / "session_filenames.jsonl", session_path)
